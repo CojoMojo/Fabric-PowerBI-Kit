@@ -1,0 +1,287 @@
+// Region KPI Card XL — pure-SVG production template (1100×600).
+// Renders a full per-region card: choropleth mini-map (left) + KPI stack +
+// sparkline (right), as a single ImageUrl measure.
+//
+// REQUIRED SETUP:
+//   • 'Dim_RegionShapes' table (from extract_svg_paths.py) with columns
+//     Code, US_Region, Path, MinX, MinY, MaxX, MaxY
+//   • Date table 'dim_calendar' with [Year] and [Month] columns (Month = 1..12)
+//   • Relationship from Dim_RegionShapes[Code] to your fact
+//   • After pasting: set dataCategory = "ImageUrl"
+//
+// Use this in a Matrix keyed on Dim_RegionShapes[US_Region] — one XL card per region.
+// Replace placeholders marked with ★.
+//
+// LAYOUT MODEL
+//   The measure is split into a CONFIG block (user-editable) and a DERIVED
+//   LAYOUT block (math'd from config). Resize the card by editing config only.
+
+Region KPI Card XL =
+    // ① CONFIG ══════════════════════════════════════════════════════════
+    //     ← edit these variables to resize sections
+    VAR _CardH      = 600     -- card height
+    VAR _MapPanelW  = 350     -- map section width
+    VAR _KpiW       = 700     -- KPI content width
+    VAR _YAxisW     = 50      -- Y-axis label lane
+    VAR _ChartH     = 100     -- sparkline height
+    VAR _ChartTopY  = 148
+    VAR _RevFs      = 62      -- Revenue / Profit font size
+    VAR _TileFs     = 38      -- KPI tile value font size
+
+    // ② DERIVED LAYOUT ══════════════════════════════════════════════════
+    //     ← calculated automatically, do not edit
+    VAR _MapSvgW    = _MapPanelW - 15
+    VAR _MapDivX    = _MapPanelW + 6
+    VAR _KX0        = _MapDivX + 12
+    VAR _KX1        = _KX0 + _KpiW
+    VAR _KMid       = _KX0 + _KpiW / 2
+    VAR _ChipX      = _KX1 - 100
+    VAR _ChipCX     = _KX1 - 50
+    VAR _TileGap    = 16
+    VAR _TileW      = INT ( ( _KpiW - 2 * _TileGap ) / 3 )
+    VAR _T1X        = _KX0
+    VAR _T2X        = _T1X + _TileW + _TileGap
+    VAR _T3X        = _T2X + _TileW + _TileGap
+    VAR _yName      = 58
+    VAR _ySub       = 84
+    VAR _yDiv1      = 108
+    VAR _yRevLbl    = 136
+    VAR _yRevVal    = 224
+    VAR _yDiv2      = 248
+    VAR _yTile      = 265
+    VAR _TileH      = 120
+    VAR _yTileLbl   = 290
+    VAR _yTileVal   = 360
+    VAR _yDiv3      = 400
+    VAR _yTrendHdr  = 426
+    VAR _SX0        = _KX0 + _YAxisW + 6
+    VAR _STW        = _KX1 - _SX0 - 4
+    VAR _STY0       = 445
+    VAR _STH        = _ChartH + 38
+    VAR _STYB       = _STY0 + _STH
+    VAR _yMonthLbl  = _STYB + 14
+
+    // ③ CURRENT SLICE ══════════════════════════════════════════════════
+    VAR _Region       = SELECTEDVALUE ( Dim_RegionShapes[US_Region] )
+    VAR _HasOneRegion = HASONEVALUE   ( Dim_RegionShapes[US_Region] )
+    VAR _HasOneCode   = HASONEVALUE   ( Dim_RegionShapes[Code] )
+    VAR _SelectedCode = SELECTEDVALUE ( Dim_RegionShapes[Code] )
+
+    // ④ CORE METRICS ══════════════════════════════════════════════════  ★ replace
+    VAR _Rev     = [Total Revenue]
+    VAR _RevPY   = [Revenue PY]
+    VAR _Profit  = [Total Profit]
+    VAR _Margin  = DIVIDE ( _Profit, _Rev )
+    VAR _AOV     = [AOV]
+    VAR _Disc    = [Avg Discount %]
+    VAR _YoY     = DIVIDE ( _Rev - _RevPY, _RevPY )
+    VAR _Terri   = CALCULATE ( DISTINCTCOUNT ( Dim_RegionShapes[Code] ) )
+    VAR _TotPort = CALCULATE ( [Total Revenue], REMOVEFILTERS ( Dim_RegionShapes ) )
+    VAR _Share   = DIVIDE ( _Rev, _TotPort )
+
+    // ⑤ COLORS ══════════════════════════════════════════════════════════
+    VAR _IsPos   = _YoY >= 0
+    VAR _Accent  = IF ( _IsPos, "rgb(61,116,169)",  "rgb(255,57,121)" )
+    VAR _ChipTxt = IF ( _IsPos, "rgb(29,113,149)",  "rgb(209,38,78)"  )
+    VAR _ChipBg  = IF ( _IsPos, "rgba(61,116,169,0.14)", "rgba(255,57,121,0.12)" )
+    VAR _Arrow   = IF ( _IsPos, "▲", "▼" )
+    VAR _Ink     = "rgb(26,39,64)"
+    VAR _InkDeep = "rgb(12,81,148)"
+    VAR _Mute    = "rgb(135,148,171)"
+    VAR _Mute2   = "rgb(190,200,218)"
+    VAR _Paper   = "rgb(255,255,255)"
+    VAR _Line    = "rgb(232,238,245)"
+    VAR _Tile    = "rgb(244,246,249)"
+    VAR _Border  = "rgb(217,226,236)"
+    VAR _MapFill = "rgb(12,81,148)"
+    VAR _MapBg   = "rgb(251,252,254)"
+    VAR _PyCol   = "rgb(160,175,198)"
+    VAR _Grid    = "rgb(238,242,248)"
+
+    // ⑥ CHOROPLETH MAP ═══════════════════════════════════════════════════
+    // ★ edit the exclusion list for shapes that look awkward at small sizes
+    --   (detached insets, tiny arctic territories, 32 KB overflow, etc.)
+    VAR _AllShapes =
+        FILTER (
+            ALL (
+                Dim_RegionShapes[Code], Dim_RegionShapes[US_Region], Dim_RegionShapes[Path],
+                Dim_RegionShapes[MinX], Dim_RegionShapes[MinY], Dim_RegionShapes[MaxX], Dim_RegionShapes[MaxY]
+            ),
+            NOT ( Dim_RegionShapes[Code] IN { "AK", "NU", "NT" } )
+        )
+    VAR _ZoomScope =
+        FILTER ( _AllShapes, NOT _HasOneRegion || Dim_RegionShapes[US_Region] = _Region )
+    VAR _MetricMax =
+        MAXX (
+            SELECTCOLUMNS ( _ZoomScope, "Code", Dim_RegionShapes[Code] ),
+            CALCULATE ( [Total Revenue], TREATAS ( { [Code] }, Dim_RegionShapes[Code] ) )
+        )
+    VAR _MapMinX = MINX ( _ZoomScope, Dim_RegionShapes[MinX] ) - 12
+    VAR _MapMinY = MINX ( _ZoomScope, Dim_RegionShapes[MinY] ) - 12
+    VAR _MapMaxX = MAXX ( _ZoomScope, Dim_RegionShapes[MaxX] ) + 12
+    VAR _MapMaxY = MAXX ( _ZoomScope, Dim_RegionShapes[MaxY] ) + 12
+    VAR _MapVBox =
+        FORMAT ( _MapMinX, "0" ) & " " & FORMAT ( _MapMinY, "0" ) & " " &
+        FORMAT ( _MapMaxX - _MapMinX, "0" ) & " " & FORMAT ( _MapMaxY - _MapMinY, "0" )
+    VAR _MapPaths =
+        CONCATENATEX (
+            _AllShapes,
+            VAR _C  = Dim_RegionShapes[Code]
+            VAR _P  = Dim_RegionShapes[Path]
+            VAR _IR = NOT _HasOneRegion || Dim_RegionShapes[US_Region] = _Region
+            VAR _TR = CALCULATE ( [Total Revenue], TREATAS ( { _C }, Dim_RegionShapes[Code] ) )
+            VAR _TP = CALCULATE ( [Revenue PY],    TREATAS ( { _C }, Dim_RegionShapes[Code] ) )
+            VAR _IS = _HasOneCode && _C = _SelectedCode
+            VAR _FC =
+                IF (
+                    NOT _IR,
+                    _MapFill,
+                    SWITCH ( TRUE (),
+                        _TR > _TP, "#3D74A9",
+                        _TR < _TP, "#ff3979",
+                        "#1D7195"
+                    )
+                )
+            VAR _OP =
+                IF (
+                    NOT _IR,
+                    0.02,                              -- ghost territories outside current region
+                    IF ( _HasOneCode, IF ( _IS, 1, 0.20 ), 0.85 )
+                )
+            RETURN
+                "<path d='" & _P & "' fill='" & _FC &
+                "' fill-opacity='" & FORMAT ( _OP, "0.00" ) &
+                "' stroke='rgb(255,255,255)' stroke-width='0.8'/>",
+            ""
+        )
+
+    // ⑦ SPARKLINE DATA ═══════════════════════════════════════════════════
+    VAR _yr      = SELECTEDVALUE ( dim_calendar[Year], YEAR ( TODAY () ) )
+    VAR _AllMo   =
+        FILTER (
+            ALL ( dim_calendar[Month] ),
+            dim_calendar[Month] >= 1 && dim_calendar[Month] <= 12
+        )
+    VAR _SparkCY =
+        ADDCOLUMNS ( _AllMo, "@R", CALCULATE ( [Total Revenue], dim_calendar[Year] = _yr ) + 0 )
+    VAR _SparkPY =
+        ADDCOLUMNS ( _AllMo, "@R", CALCULATE ( [Revenue PY],    dim_calendar[Year] = _yr ) + 0 )
+    VAR _CYVals  = SELECTCOLUMNS ( _SparkCY, "M", dim_calendar[Month], "V", [@R] )
+    VAR _PYVals  = SELECTCOLUMNS ( _SparkPY, "M", dim_calendar[Month], "V", [@R] )
+    VAR _Scale   = MAX ( MAX ( MAXX ( _CYVals, [V] ), MAXX ( _PYVals, [V] ) ), 1 )
+    VAR _G50y    = FORMAT ( _STY0 + _STH * 0.5, "0.1" )
+    VAR _Lbl50   = "$" & FORMAT ( _Scale * 0.5 / 1E6, "0.0" ) & "M"
+    VAR _Lbl100  = "$" & FORMAT ( _Scale / 1E6, "0.0" ) & "M"
+    VAR _X1      = FORMAT ( _SX0,        "0" )
+    VAR _X2      = FORMAT ( _SX0 + _STW, "0" )
+    VAR _CYPts =
+        CONCATENATEX (
+            _CYVals,
+            VAR _Px = _SX0 + ( [M] - 1 ) / 11 * _STW
+            VAR _Py = _STY0 + _STH - DIVIDE ( [V], _Scale, 0 ) * _STH
+            RETURN FORMAT ( _Px, "0.1" ) & "," & FORMAT ( _Py, "0.1" ),
+            " ", [M], ASC
+        )
+    VAR _PYPts =
+        CONCATENATEX (
+            _PYVals,
+            VAR _Px = _SX0 + ( [M] - 1 ) / 11 * _STW
+            VAR _Py = _STY0 + _STH - DIVIDE ( [V], _Scale, 0 ) * _STH
+            RETURN FORMAT ( _Px, "0.1" ) & "," & FORMAT ( _Py, "0.1" ),
+            " ", [M], ASC
+        )
+    VAR _CYArea =
+        _X1 & "," & FORMAT ( _STYB, "0" ) & " " & _CYPts & " " &
+        _X2 & "," & FORMAT ( _STYB, "0" )
+    VAR _CYDots =
+        CONCATENATEX (
+            _CYVals,
+            VAR _Px = FORMAT ( _SX0 + ( [M] - 1 ) / 11 * _STW, "0.1" )
+            VAR _Py = FORMAT ( _STY0 + _STH - DIVIDE ( [V], _Scale, 0 ) * _STH, "0.1" )
+            RETURN
+                "<circle cx='" & _Px & "' cy='" & _Py & "' r='4' fill='" & _Accent &
+                "' stroke='white' stroke-width='2'/>",
+            "", [M], ASC
+        )
+    VAR _PYDots =
+        CONCATENATEX (
+            _PYVals,
+            VAR _Px = FORMAT ( _SX0 + ( [M] - 1 ) / 11 * _STW, "0.1" )
+            VAR _Py = FORMAT ( _STY0 + _STH - DIVIDE ( [V], _Scale, 0 ) * _STH, "0.1" )
+            RETURN
+                "<circle cx='" & _Px & "' cy='" & _Py & "' r='3' fill='white' stroke='" & _PyCol &
+                "' stroke-width='2'/>",
+            "", [M], ASC
+        )
+    VAR _MxJan = FORMAT ( _SX0, "0" )
+    VAR _MxApr = FORMAT ( _SX0 + 3 * _STW / 11, "0" )
+    VAR _MxJul = FORMAT ( _SX0 + 6 * _STW / 11, "0" )
+    VAR _MxOct = FORMAT ( _SX0 + 9 * _STW / 11, "0" )
+    VAR _MxDec = FORMAT ( _SX0 + _STW, "0" )
+    VAR _YrCY  = FORMAT ( _yr, "0" )
+    VAR _YrPY  = FORMAT ( _yr - 1, "0" )
+
+    // ⑧ TEXT FORMATTING ══════════════════════════════════════════════════
+    VAR _RevTxt    = "$" & FORMAT ( _Rev    / 1E6, "0.0" ) & "M"
+    VAR _ProfitTxt = "$" & FORMAT ( _Profit / 1E6, "0.0" ) & "M"
+    VAR _MarginTxt = FORMAT ( _Margin, "0.0%" )
+    VAR _AOVTxt    = "$" & FORMAT ( _AOV, "#,##0" )
+    VAR _DiscTxt   = FORMAT ( _Disc, "0.0%" )
+    VAR _YoYTxt    = IF ( _IsPos, "+", "" ) & FORMAT ( _YoY, "0.0%" )
+    VAR _ShareTxt  = FORMAT ( _Share, "0.0%" )
+
+    // ⑨ SVG ASSEMBLY ═════════════════════════════════════════════════════
+    VAR _DivY1 = FORMAT ( _CardH * 0.05, "0" )
+    VAR _DivY2 = FORMAT ( _CardH * 0.95, "0" )
+    VAR _SVG =
+    "data:image/svg+xml;utf8," &
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1100 " & FORMAT ( _CardH, "0" ) & "' preserveAspectRatio='xMidYMid meet'>" &
+        "<rect x='0.5' y='0.5' width='1099' height='" & FORMAT ( _CardH - 1, "0" ) & "' rx='11' ry='11' fill='" & _Paper & "' stroke='" & _Border & "' stroke-width='1'/>" &
+        "<path d='M11,1 H" & FORMAT ( _MapPanelW, "0" ) & " V" & FORMAT ( _CardH - 1, "0" ) & " H11 Q1," & FORMAT ( _CardH - 1, "0" ) & " 1," & FORMAT ( _CardH - 11, "0" ) & " V11 Q1,1 11,1 Z' fill='" & _MapBg & "'/>" &
+        "<rect x='1' y='1' width='3' height='" & FORMAT ( _CardH - 2, "0" ) & "' rx='1.5' ry='1.5' fill='" & _Accent & "' opacity='0.75'/>" &
+        "<line x1='" & FORMAT ( _MapDivX, "0" ) & "' y1='" & _DivY1 & "' x2='" & FORMAT ( _MapDivX, "0" ) & "' y2='" & _DivY2 & "' stroke='" & _Line & "' stroke-width='1'/>" &
+        "<svg x='10' y='8' width='" & FORMAT ( _MapSvgW, "0" ) & "' height='" & FORMAT ( _CardH - 16, "0" ) & "' viewBox='" & _MapVBox & "' preserveAspectRatio='xMidYMid meet'>" & _MapPaths & "</svg>" &
+        "<text x='" & FORMAT ( _KX0, "0" ) & "' y='" & FORMAT ( _yName, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='42' font-weight='600' fill='" & _Ink & "' letter-spacing='-0.5'>" & IF ( _HasOneRegion, _Region, "All Regions" ) & "</text>" &
+        "<text x='" & FORMAT ( _KX0, "0" ) & "' y='" & FORMAT ( _ySub + 5, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='20' font-weight='400' fill='" & _Mute & "'>" & _ShareTxt & " of portfolio · " & _Terri & " territories</text>" &
+        "<rect x='" & FORMAT ( _ChipX - 15, "0" ) & "' y='22' width='130' height='44' rx='8' ry='8' fill='" & _ChipBg & "'/>" &
+        "<text x='" & FORMAT ( _ChipCX, "0" ) & "' y='51' text-anchor='middle' font-family='Segoe UI, sans-serif' font-size='25' font-weight='700' fill='" & _ChipTxt & "'>" & _Arrow & " " & _YoYTxt & "</text>" &
+        "<line x1='" & FORMAT ( _KX0 - 2, "0" ) & "' y1='" & FORMAT ( _yDiv1, "0" ) & "' x2='" & FORMAT ( _KX1 + 2, "0" ) & "' y2='" & FORMAT ( _yDiv1, "0" ) & "' stroke='" & _Line & "' stroke-dasharray='3 4' stroke-width='1.5'/>" &
+        "<text x='" & FORMAT ( _KX0, "0" ) & "' y='" & FORMAT ( _yRevLbl, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='18' font-weight='700' fill='" & _Mute & "' letter-spacing='2'>REVENUE</text>" &
+        "<text x='" & FORMAT ( _KX0, "0" ) & "' y='" & FORMAT ( _yRevVal, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='" & FORMAT ( _RevFs, "0" ) & "' font-weight='700' fill='" & _InkDeep & "' letter-spacing='-1.5'>" & _RevTxt & "</text>" &
+        "<text x='" & FORMAT ( _KMid, "0" ) & "' y='" & FORMAT ( _yRevLbl, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='18' font-weight='700' fill='" & _Mute & "' letter-spacing='2'>PROFIT</text>" &
+        "<text x='" & FORMAT ( _KMid, "0" ) & "' y='" & FORMAT ( _yRevVal, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='" & FORMAT ( _RevFs, "0" ) & "' font-weight='700' fill='" & _InkDeep & "' letter-spacing='-1.5'>" & _ProfitTxt & "</text>" &
+        "<line x1='" & FORMAT ( _KX0 - 2, "0" ) & "' y1='" & FORMAT ( _yDiv2, "0" ) & "' x2='" & FORMAT ( _KX1 + 2, "0" ) & "' y2='" & FORMAT ( _yDiv2, "0" ) & "' stroke='" & _Line & "' stroke-dasharray='3 4' stroke-width='1.5'/>" &
+        "<rect x='" & FORMAT ( _T1X, "0" ) & "' y='" & FORMAT ( _yTile, "0" ) & "' width='" & FORMAT ( _TileW, "0" ) & "' height='" & FORMAT ( _TileH, "0" ) & "' rx='8' ry='8' fill='" & _Tile & "' stroke='" & _Line & "'/>" &
+        "<text x='" & FORMAT ( _T1X + 16, "0" ) & "' y='" & FORMAT ( _yTileLbl, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='18' font-weight='700' fill='" & _Mute & "' letter-spacing='1.5'>MARGIN</text>" &
+        "<text x='" & FORMAT ( _T1X + 16, "0" ) & "' y='" & FORMAT ( _yTileVal, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='" & FORMAT ( _TileFs, "0" ) & "' font-weight='600' fill='" & _Ink & "'>" & _MarginTxt & "</text>" &
+        "<rect x='" & FORMAT ( _T2X, "0" ) & "' y='" & FORMAT ( _yTile, "0" ) & "' width='" & FORMAT ( _TileW, "0" ) & "' height='" & FORMAT ( _TileH, "0" ) & "' rx='8' ry='8' fill='" & _Tile & "' stroke='" & _Line & "'/>" &
+        "<text x='" & FORMAT ( _T2X + 16, "0" ) & "' y='" & FORMAT ( _yTileLbl, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='18' font-weight='700' fill='" & _Mute & "' letter-spacing='1.5'>AVG ORDER VALUE</text>" &
+        "<text x='" & FORMAT ( _T2X + 16, "0" ) & "' y='" & FORMAT ( _yTileVal, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='" & FORMAT ( _TileFs, "0" ) & "' font-weight='600' fill='" & _Ink & "'>" & _AOVTxt & "</text>" &
+        "<rect x='" & FORMAT ( _T3X, "0" ) & "' y='" & FORMAT ( _yTile, "0" ) & "' width='" & FORMAT ( _TileW, "0" ) & "' height='" & FORMAT ( _TileH, "0" ) & "' rx='8' ry='8' fill='" & _Tile & "' stroke='" & _Line & "'/>" &
+        "<text x='" & FORMAT ( _T3X + 16, "0" ) & "' y='" & FORMAT ( _yTileLbl, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='18' font-weight='700' fill='" & _Mute & "' letter-spacing='1.5'>DISCOUNT</text>" &
+        "<text x='" & FORMAT ( _T3X + 16, "0" ) & "' y='" & FORMAT ( _yTileVal, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='" & FORMAT ( _TileFs, "0" ) & "' font-weight='600' fill='" & _Ink & "'>" & _DiscTxt & "</text>" &
+        "<line x1='" & FORMAT ( _KX0 - 2, "0" ) & "' y1='" & FORMAT ( _yDiv3, "0" ) & "' x2='" & FORMAT ( _KX1 + 2, "0" ) & "' y2='" & FORMAT ( _yDiv3, "0" ) & "' stroke='" & _Line & "' stroke-dasharray='3 4' stroke-width='1.5'/>" &
+        "<text x='" & FORMAT ( _KX0 + _YAxisW + 6, "0" ) & "' y='" & FORMAT ( _yTrendHdr, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='13' font-weight='700' fill='" & _Mute & "' letter-spacing='1.5'>12M REVENUE TREND</text>" &
+        "<line x1='" & FORMAT ( _SX0 + _STW * 0.56, "0" ) & "' y1='" & FORMAT ( _yTrendHdr - 7, "0" ) & "' x2='" & FORMAT ( _SX0 + _STW * 0.66, "0" ) & "' y2='" & FORMAT ( _yTrendHdr - 7, "0" ) & "' stroke='" & _Accent & "' stroke-width='3' stroke-linecap='round'/>" &
+        "<circle cx='" & FORMAT ( _SX0 + _STW * 0.61, "0" ) & "' cy='" & FORMAT ( _yTrendHdr - 7, "0" ) & "' r='3.5' fill='" & _Accent & "' stroke='white' stroke-width='1.5'/>" &
+        "<text x='" & FORMAT ( _SX0 + _STW * 0.67, "0" ) & "' y='" & FORMAT ( _yTrendHdr - 3, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='12' font-weight='600' fill='" & _Mute & "'>" & _YrCY & "</text>" &
+        "<line x1='" & FORMAT ( _SX0 + _STW * 0.76, "0" ) & "' y1='" & FORMAT ( _yTrendHdr - 7, "0" ) & "' x2='" & FORMAT ( _SX0 + _STW * 0.86, "0" ) & "' y2='" & FORMAT ( _yTrendHdr - 7, "0" ) & "' stroke='" & _PyCol & "' stroke-width='2' stroke-dasharray='4 3' stroke-linecap='round'/>" &
+        "<circle cx='" & FORMAT ( _SX0 + _STW * 0.81, "0" ) & "' cy='" & FORMAT ( _yTrendHdr - 7, "0" ) & "' r='3' fill='white' stroke='" & _PyCol & "' stroke-width='2'/>" &
+        "<text x='" & FORMAT ( _SX0 + _STW * 0.87, "0" ) & "' y='" & FORMAT ( _yTrendHdr - 3, "0" ) & "' font-family='Segoe UI, sans-serif' font-size='12' font-weight='600' fill='" & _Mute & "'>" & _YrPY & "</text>" &
+        "<text x='" & FORMAT ( _KX0 + _YAxisW, "0" ) & "' y='" & FORMAT ( _STY0 + 5, "0" ) & "' text-anchor='end' font-family='Segoe UI, sans-serif' font-size='11' fill='" & _Mute2 & "'>" & _Lbl100 & "</text>" &
+        "<text x='" & FORMAT ( _KX0 + _YAxisW, "0" ) & "' y='" & FORMAT ( _STY0 + _STH * 0.5 + 4, "0.1" ) & "' text-anchor='end' font-family='Segoe UI, sans-serif' font-size='11' fill='" & _Mute2 & "'>" & _Lbl50 & "</text>" &
+        "<text x='" & FORMAT ( _KX0 + _YAxisW, "0" ) & "' y='" & FORMAT ( _STYB - 2, "0" ) & "' text-anchor='end' font-family='Segoe UI, sans-serif' font-size='11' fill='" & _Mute2 & "'>$0</text>" &
+        "<line x1='" & _X1 & "' y1='" & _G50y & "' x2='" & _X2 & "' y2='" & _G50y & "' stroke='" & _Grid & "' stroke-width='1.5'/>" &
+        "<line x1='" & _X1 & "' y1='" & FORMAT ( _STYB, "0" ) & "' x2='" & _X2 & "' y2='" & FORMAT ( _STYB, "0" ) & "' stroke='" & _Line & "' stroke-width='1.5'/>" &
+        "<polygon points='" & _CYArea & "' fill='" & _Accent & "' fill-opacity='0.07'/>" &
+        "<polyline points='" & _PYPts & "' fill='none' stroke='" & _PyCol & "' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' stroke-dasharray='6 4'/>" &
+        _PYDots &
+        "<polyline points='" & _CYPts & "' fill='none' stroke='" & _Accent & "' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/>" &
+        _CYDots &
+        "<text x='" & _MxJan & "' y='" & FORMAT ( _yMonthLbl, "0" ) & "' text-anchor='middle' font-family='Segoe UI, sans-serif' font-size='12' fill='" & _Mute & "'>Jan</text>" &
+        "<text x='" & _MxApr & "' y='" & FORMAT ( _yMonthLbl, "0" ) & "' text-anchor='middle' font-family='Segoe UI, sans-serif' font-size='12' fill='" & _Mute & "'>Apr</text>" &
+        "<text x='" & _MxJul & "' y='" & FORMAT ( _yMonthLbl, "0" ) & "' text-anchor='middle' font-family='Segoe UI, sans-serif' font-size='12' fill='" & _Mute & "'>Jul</text>" &
+        "<text x='" & _MxOct & "' y='" & FORMAT ( _yMonthLbl, "0" ) & "' text-anchor='middle' font-family='Segoe UI, sans-serif' font-size='12' fill='" & _Mute & "'>Oct</text>" &
+        "<text x='" & _MxDec & "' y='" & FORMAT ( _yMonthLbl, "0" ) & "' text-anchor='middle' font-family='Segoe UI, sans-serif' font-size='12' fill='" & _Mute & "'>Dec</text>" &
+    "</svg>"
+    RETURN _SVG

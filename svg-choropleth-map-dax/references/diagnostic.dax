@@ -1,0 +1,38 @@
+// Diagnostic query — paste into DAX Query View when the map renders blank.
+// Tells you exactly what's going wrong per group.
+//
+// Replace "SVG Map" with your measure name and "Group" with your grouping column.
+
+EVALUATE
+SUMMARIZECOLUMNS (
+    'Dim_Shapes'[Group],
+    "scope_rows",    CALCULATE ( COUNTROWS ( 'Dim_Shapes' ) ),
+    "svg_len",       LEN ( [SVG Map] ),
+    "svg_first_400", LEFT ( [SVG Map], 400 ),
+    "total_metric",  [Total Revenue]
+)
+ORDER BY [Group]
+
+-- READING THE OUTPUT:
+--
+-- scope_rows = 0
+--   → _SelectedGroup doesn't match any shapes. Check spelling (East vs Eastern
+--     vs East Coast), check which table is filtering.
+--
+-- svg_len < 500
+--   → Scope produced 0 paths. Check _Scope and the FILTER predicate.
+--
+-- svg_first_400 contains a trailing dot like "458." or "315."
+--   → Classic viewBox bug. Change FORMAT(..., "0.##") to FORMAT(..., "0.00").
+--
+-- svg_first_400 looks fine but the visual is still blank
+--   → Check dataCategory is "ImageUrl", not the default. Also check visual
+--     image size is set explicitly in format pane.
+--
+-- total_metric = BLANK for a group
+--   → Data mismatch between Dim_Shapes[Code] and your fact join key.
+--     The map will render with the 0.15 opacity floor but no color variation.
+--
+-- svg_len > 32000
+--   → You're hitting the 32 KB ImageUrl truncation limit. Simplify paths
+--     with mapshaper (https://mapshaper.org/) or exclude detailed shapes.

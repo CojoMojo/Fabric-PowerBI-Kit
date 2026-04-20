@@ -1,0 +1,125 @@
+// SVG Choropleth Map — canonical template.
+// Replace placeholders marked with ★ before use.
+// Credit: Andrzej Leszkiewicz (Poland SVG Map, CC BY 4.0) — extended with dynamic zoom.
+//
+// REQUIRED SETUP:
+//   1. Table 'Dim_Shapes' with columns: Code, Name, Group, Path, MinX, MinY, MaxX, MaxY
+//   2. Relationship from Dim_Shapes[Code] to your fact/dim table
+//   3. After pasting: set dataCategory = "ImageUrl" on this measure
+
+SVG Map =
+    //=== CONFIG ══════════════════════════════════════════════════════════
+    VAR _StrokeWidth    = 0.5
+    VAR _StrokeColor    = "#333333"
+    VAR _FillSelected   = "#E91E63"         -- ★ highlight / choropleth fill
+    VAR _FillUnselected = "#ECECEC"         -- ★ muted fill for non-selected
+    VAR _Padding        = 20
+    VAR _MaxDim         = 500               -- longest side of output SVG (px)
+
+    //=== SELECTION STATE ═════════════════════════════════════════════════
+    -- Falls back across tables so the measure works whether the slicer is
+    -- on the shapes table or a related dim.
+    VAR _SelCodeShapes   = SELECTEDVALUE ( 'Dim_Shapes'[Code] )
+    VAR _SelGroupShapes  = SELECTEDVALUE ( 'Dim_Shapes'[Group] )
+    VAR _SelGroupRelated = SELECTEDVALUE ( 'YourDim'[Group] )           -- ★ optional, or remove
+    VAR _SelectedGroup   = COALESCE ( _SelGroupShapes, _SelGroupRelated )
+    VAR _SelectedCode    = _SelCodeShapes
+    VAR _HasOneCode      = NOT ISBLANK ( _SelectedCode )
+    VAR _HasOneGroup     = NOT ISBLANK ( _SelectedGroup )
+
+    //=== SCOPE (full map OR zoom to group) ═══════════════════════════════
+    -- FILTER returns a table (IF cannot). Short-circuit predicate:
+    -- no group selected → all rows; group selected → only matching rows.
+    VAR _Scope =
+        FILTER (
+            ALL ( 'Dim_Shapes' ),
+            NOT _HasOneGroup || 'Dim_Shapes'[Group] = _SelectedGroup
+        )
+    VAR _ScopeCount = COUNTROWS ( _Scope )
+
+    //=== DRIVING METRIC (max within scope) ═══════════════════════════════
+    -- TREATAS avoids the "multiple columns" error that implicit context
+    -- transition causes when rows contain wide string columns (Path).
+    VAR _MetricMax =
+        MAXX (
+            _Scope,
+            CALCULATE (
+                [Total Revenue],                                         -- ★ your metric
+                TREATAS ( { 'Dim_Shapes'[Code] }, 'Dim_Shapes'[Code] )
+            )
+        )
+
+    //=== DYNAMIC VIEWBOX ═════════════════════════════════════════════════
+    VAR _MinX = MINX ( _Scope, 'Dim_Shapes'[MinX] ) - _Padding
+    VAR _MinY = MINX ( _Scope, 'Dim_Shapes'[MinY] ) - _Padding
+    VAR _MaxX = MAXX ( _Scope, 'Dim_Shapes'[MaxX] ) + _Padding
+    VAR _MaxY = MAXX ( _Scope, 'Dim_Shapes'[MaxY] ) + _Padding
+    VAR _VBW = _MaxX - _MinX
+    VAR _VBH = _MaxY - _MinY
+
+    -- CRITICAL: use "0.00" NOT "0.##".
+    -- FORMAT(458.0, "0.##") returns "458." — trailing dot breaks SVG parsing
+    -- and renders blank silently. This is the #1 cause of "my map doesn't show."
+    VAR _ViewBox =
+        FORMAT ( _MinX, "0.00" ) & " " &
+        FORMAT ( _MinY, "0.00" ) & " " &
+        FORMAT ( _VBW,  "0.00" ) & " " &
+        FORMAT ( _VBH,  "0.00" )
+
+    //=== ADAPTIVE OUTPUT SIZE ════════════════════════════════════════════
+    -- Wide regions get a wide SVG; tall regions get a tall one.
+    VAR _AspectScale = DIVIDE ( _MaxDim, IF ( _VBW > _VBH, _VBW, _VBH ) )
+    VAR _OutW = ROUND ( _VBW * _AspectScale, 0 )
+    VAR _OutH = ROUND ( _VBH * _AspectScale, 0 )
+
+    //=== BUILD SVG ═══════════════════════════════════════════════════════
+    -- Sort trick: Power BI sorts ImageUrl columns lexicographically.
+    -- Prefix with a zero-padded metric comment so the column sorts by value.
+    VAR _SortComment = "/*" & FORMAT ( INT ( COALESCE ( [Total Revenue], 0 ) ), "0000000000" ) & "*/"
+    VAR _Header = "data:image/svg+xml;utf8,"
+    VAR _Open =
+        "<svg xmlns=""http://www.w3.org/2000/svg"" viewBox='" & _ViewBox &
+        "' width='" & _OutW & "' height='" & _OutH &
+        "' preserveAspectRatio='xMidYMid meet'>"
+    VAR _Close = "</svg>"
+
+    VAR _Paths =
+        CONCATENATEX (
+            _Scope,
+            VAR _ThisCode   = 'Dim_Shapes'[Code]
+            VAR _ThisPath   = 'Dim_Shapes'[Path]
+            VAR _ThisMetric =
+                CALCULATE (
+                    [Total Revenue],                                     -- ★ same metric as above
+                    TREATAS ( { _ThisCode }, 'Dim_Shapes'[Code] )
+                )
+            VAR _IsSelected = _HasOneCode && _ThisCode = _SelectedCode
+            VAR _Fill =
+                IF ( _IsSelected || NOT _HasOneCode, _FillSelected, _FillUnselected )
+            VAR _Ratio = COALESCE ( ROUND ( DIVIDE ( _ThisMetric, _MetricMax ), 2 ), 0 )
+            VAR _Opacity =
+                IF (
+                    _HasOneCode,
+                    IF ( _IsSelected, 1, 0.15 ),
+                    -- Choropleth with 0.15 floor so zero-value regions still show as outlines.
+                    IF ( _Ratio > 0.15, _Ratio, 0.15 )
+                )
+            RETURN
+                "<path d='" & _ThisPath &
+                "' stroke-width='" & _StrokeWidth &
+                "' stroke='" & _StrokeColor &
+                "' fill='" & _Fill &
+                "' fill-opacity='" & FORMAT ( _Opacity, "0.00" ) &
+                "'></path>",
+            ""
+        )
+
+    RETURN
+        IF (
+            _ScopeCount = 0,
+            -- Debug fallback: surface WHY it's empty instead of rendering blank.
+            _Header & "<svg xmlns=""http://www.w3.org/2000/svg"" width='500' height='200'>" &
+            "<text x='10' y='30' font-size='14' fill='#999'>No scope rows · group='" &
+            COALESCE ( _SelectedGroup, "(blank)" ) & "'</text></svg>",
+            _Header & _Open & _SortComment & _Paths & _Close
+        )

@@ -1,0 +1,84 @@
+// Isolated test measure — hardcoded to ONE group. Use this to confirm the
+// rendering pipeline works independent of filter context. If this renders
+// but the main measure doesn't, the issue is selection detection.
+//
+// Replace "★ HARDCODED_GROUP ★" with the group value you want to test
+// (e.g. "South", "Europe", "Northeast_Zone").
+
+SVG Map Test =
+    VAR _StrokeWidth  = 0.5
+    VAR _StrokeColor  = "#333333"
+    VAR _FillSelected = "#E91E63"
+    VAR _Padding      = 20
+    VAR _MaxDim       = 500
+
+    VAR _Scope =
+        FILTER (
+            ALL ( 'Dim_Shapes' ),
+            'Dim_Shapes'[Group] = "★ HARDCODED_GROUP ★"                  -- ★ change this
+        )
+    VAR _ScopeCount = COUNTROWS ( _Scope )
+
+    VAR _MetricMax =
+        MAXX (
+            _Scope,
+            CALCULATE (
+                [Total Revenue],                                         -- ★ your metric
+                TREATAS ( { 'Dim_Shapes'[Code] }, 'Dim_Shapes'[Code] )
+            )
+        )
+
+    VAR _MinX = MINX ( _Scope, 'Dim_Shapes'[MinX] ) - _Padding
+    VAR _MinY = MINX ( _Scope, 'Dim_Shapes'[MinY] ) - _Padding
+    VAR _MaxX = MAXX ( _Scope, 'Dim_Shapes'[MaxX] ) + _Padding
+    VAR _MaxY = MAXX ( _Scope, 'Dim_Shapes'[MaxY] ) + _Padding
+    VAR _VBW = _MaxX - _MinX
+    VAR _VBH = _MaxY - _MinY
+
+    -- "0.00" not "0.##" — see the SKILL.md for why.
+    VAR _ViewBox =
+        FORMAT ( _MinX, "0.00" ) & " " &
+        FORMAT ( _MinY, "0.00" ) & " " &
+        FORMAT ( _VBW,  "0.00" ) & " " &
+        FORMAT ( _VBH,  "0.00" )
+
+    VAR _AspectScale = DIVIDE ( _MaxDim, IF ( _VBW > _VBH, _VBW, _VBH ) )
+    VAR _OutW = ROUND ( _VBW * _AspectScale, 0 )
+    VAR _OutH = ROUND ( _VBH * _AspectScale, 0 )
+
+    VAR _Header = "data:image/svg+xml;utf8,"
+    VAR _Open =
+        "<svg xmlns=""http://www.w3.org/2000/svg"" viewBox='" & _ViewBox &
+        "' width='" & _OutW & "' height='" & _OutH &
+        "' preserveAspectRatio='xMidYMid meet'>"
+    VAR _Close = "</svg>"
+
+    VAR _Paths =
+        CONCATENATEX (
+            _Scope,
+            VAR _ThisCode   = 'Dim_Shapes'[Code]
+            VAR _ThisPath   = 'Dim_Shapes'[Path]
+            VAR _ThisMetric =
+                CALCULATE (
+                    [Total Revenue],
+                    TREATAS ( { _ThisCode }, 'Dim_Shapes'[Code] )
+                )
+            VAR _Ratio   = COALESCE ( ROUND ( DIVIDE ( _ThisMetric, _MetricMax ), 2 ), 0 )
+            VAR _Opacity = IF ( _Ratio > 0.15, _Ratio, 0.15 )
+            RETURN
+                "<path d='" & _ThisPath &
+                "' stroke-width='" & _StrokeWidth &
+                "' stroke='" & _StrokeColor &
+                "' fill='" & _FillSelected &
+                "' fill-opacity='" & FORMAT ( _Opacity, "0.00" ) &
+                "'></path>",
+            ""
+        )
+
+    RETURN
+        IF (
+            _ScopeCount = 0,
+            _Header & "<svg xmlns=""http://www.w3.org/2000/svg"" width='500' height='200'>" &
+            "<text x='10' y='30' font-size='14' fill='#999'>No rows for hardcoded group</text></svg>",
+            _Header & _Open & _Paths & _Close
+        )
